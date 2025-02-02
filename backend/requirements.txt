@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pillow
+diffusers
+transformers
+accelerate
+segment-anything
