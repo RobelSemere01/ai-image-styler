@@ -1,0 +1,15 @@
+attr==0.3.2
+cryptography==44.0.1
+diffusers==0.32.2
+fastapi==0.115.8
+filelock==3.17.0
+Pillow==11.1.0
+protobuf==5.29.3
+pyOpenSSL==25.0.0
+torch==2.6.0+cpu
+torchvision==0.21.0+cpu
+torchaudio==2.6.0+cpu
+transformers
+accelerate
+python-multipart
+
