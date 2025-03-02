@@ -7,3 +7,6 @@ torch==2.6.0
 opencv-python
 python-multipart
 uvicorn
+torchvision
+transformers
+accelerate
