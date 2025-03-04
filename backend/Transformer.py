@@ -4,65 +4,101 @@ from PIL import Image
 import logging
 import numpy as np
 import cv2
-from backend.model import load_sd_model
-import os
-
+import torch
+import mediapipe as mp
+from backend.model import load_sd_model  # ✅ Centralized model loading
 
 logger = logging.getLogger("AI-Styler")
 router = APIRouter()
 
-# Load the model once for use in this route module
-sd_pipe = load_sd_model()
+# ✅ Load both SDXL Base & Refiner from model.py
+sdxl_base, sdxl_refiner = load_sd_model()
 
 def detect_face_mask(image):
-    """ Detects face using OpenCV and generates a more precise mask. """
-    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+    """ Detects faces using MediaPipe and generates a precise mask. """
+    mp_face_detection = mp.solutions.face_detection
+    face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.5)
 
-# Get the absolute path of the cascade file
-    cascade_path = os.path.join(os.path.dirname(__file__), "haarcascade_frontalface_default.xml")
-
-    face_cascade = cv2.CascadeClassifier(cascade_path)
-
-    faces = face_cascade.detectMultiScale(gray, 1.2, 5)
+    image_np = np.array(image)
+    results = face_detection.process(image_np)
 
     mask = np.zeros(image.size[::-1], dtype=np.uint8)  # Black background
-    for (x, y, w, h) in faces:
-        cv2.rectangle(mask, (x, y), (x + w, y + h), 255, -1)  
+    if results.detections:
+        for detection in results.detections:
+            bboxC = detection.location_data.relative_bounding_box
+            h, w = image.size[::-1]
+            x = int(bboxC.xmin * w)
+            y = int(bboxC.ymin * h)
+            width = int(bboxC.width * w)
+            height = int(bboxC.height * h)
+            # Expand mask slightly to cover the entire face
+            cv2.rectangle(mask, (x, y), (x + width, y + height), 255, -1)
 
+    # Refine mask
+    mask = refine_mask(mask)
     return Image.fromarray(mask)
 
-@router.post("/stylize-imageStable/")  # ✅ Fix: Use `router.post`, not `app.post`
-async def stylize_image(file: UploadFile, prompt: str = Form(...), strength: float = Form(0.4), guidance: float = Form(8.0)):
+def refine_mask(mask):
+    """Refines the mask using morphological operations."""
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.dilate(mask, kernel, iterations=1)  # Expand mask
+    mask = cv2.erode(mask, kernel, iterations=1)   # Shrink mask
+    return mask
+
+@router.post("/stylize-imageStable/")
+async def stylize_image(
+    file: UploadFile, 
+    prompt: str = Form(...), 
+    strength_base: float = Form(0.7), 
+    guidance_base: float = Form(12.0),
+    strength_refiner: float = Form(0.4),
+    guidance_refiner: float = Form(7.5)
+):
     """
-    Stylizes an uploaded image using Stable Diffusion while preserving facial structure.
+    🚀 Stylizes an image using SDXL Base & Refiner.
+    - Base model applies **artistic transformation**.
+    - Refiner model **enhances details**.
+    - Uses a **face mask** to protect facial structure.
     """
-    if sd_pipe is None:
-        return {"status": "error", "message": "Stable Diffusion model failed to load."}
+    if sdxl_base is None or sdxl_refiner is None:
+        return {"status": "error", "message": "Stable Diffusion models failed to load."}
 
     try:
-        logger.info(f"Received request to stylize image with prompt: {prompt}, strength: {strength}, guidance: {guidance}")
-
-        input_image = Image.open(io.BytesIO(await file.read())).convert("RGB").resize((512, 512))
+        logger.info(f"🖼️ Received request to stylize image with prompt: {prompt}")
         
-        # Generate a more accurate face mask
+        # Read and preprocess the image
+        input_image = Image.open(io.BytesIO(await file.read())).convert("RGB").resize((1024, 1024))
+        
+        # Generate a precise face mask
         face_mask = detect_face_mask(input_image)
 
-        # Apply style transfer while preserving face structure
-        styled_image = sd_pipe(
+        # 🎨 **Step 1: Apply artistic transformation with SDXL Base**
+        logger.info("🎨 Applying SDXL Base for style transfer...")
+        stylized_image = sdxl_base(
             prompt=prompt,
             image=input_image,
-            strength=strength,
-            guidance_scale=guidance,
+            strength=strength_base,
+            guidance_scale=guidance_base,
             mask_image=face_mask
         ).images[0]
 
+        # 🔍 **Step 2: Enhance details with SDXL Refiner**
+        logger.info("🔍 Applying SDXL Refiner for fine-tuning...")
+        refined_image = sdxl_refiner(
+            prompt="Enhance details, improve color and texture",
+            image=stylized_image,
+            strength=strength_refiner,
+            guidance_scale=guidance_refiner
+        ).images[0]
+
+        # 🖼️ Convert to bytes and return the final image
         img_io = io.BytesIO()
-        styled_image.save(img_io, format="PNG")
+        refined_image.save(img_io, format="PNG")
         img_io.seek(0)
 
-        logger.info("Image stylized successfully with face preservation.")
+        logger.info("✅ Image successfully stylized!")
         return Response(content=img_io.getvalue(), media_type="image/png")
 
     except Exception as e:
-        logger.error(f"Error during image stylization: {e}")
+        logger.error(f"❌ Error during image stylization: {e}")
         return {"status": "error", "message": str(e)}
