@@ -22,13 +22,13 @@ router = APIRouter()  # ✅ Define router
 
 
 # Load the model once for use in this route module
-pipe = load_sd_model()
+sdxl_base, sdxl_refiner = load_sd_model()
 
 # Load Segment Anything Model (SAM)
 sam_predictor = load_sam_model()  # ✅ Now it's stored and can be used
 
 
-@router.post("/stylize-image/")
+@router.post("/stylize-imageOld/") #gamla bara ändrad endpoint för testtning
 async def stylize_image(file: UploadFile, 
                         prompt: str = Form(...), 
                         box_coordinates: str = Form(...)):
@@ -169,3 +169,102 @@ async def progress_websocket(websocket: WebSocket):
     finally:
         await websocket.close()
         logger.info("WebSocket connection closed")
+
+
+@router.post("/stylize-image/")
+async def stylize_image(file: UploadFile, 
+                        prompt: str = Form(...), 
+                        box_coordinates: str = Form(...),
+                        strength_base: float = Form(0.7), 
+                        guidance_base: float = Form(12.0),
+                        strength_refiner: float = Form(0.4),
+                        guidance_refiner: float = Form(7.5)):
+    """
+    🚀 Stylizes an uploaded image using SDXL Base & Refiner while keeping SAM segmentation logic intact.
+    - Uses SAM for object segmentation.
+    - Applies artistic transformation ONLY within the mask.
+    - Uses SDXL Base for main transformation.
+    - Uses SDXL Refiner for fine details.
+    """
+    if sdxl_base is None or sdxl_refiner is None:
+        return {"status": "error", "message": "Stable Diffusion models failed to load."}
+
+    try:
+        logger.info(f"🖼️ Received request to stylize image with prompt: {prompt}")
+
+        # Read and convert the image
+        input_image = Image.open(io.BytesIO(await file.read())).convert("RGB")
+        image_array = np.array(input_image)
+
+        # Parse the bounding box coordinates (format: "x0,y0,x1,y1")
+        box_coords = list(map(int, box_coordinates.split(',')))
+        box = np.array(box_coords)
+
+        # Use SAM to generate the segmentation mask
+        logger.info(f"🔹 Applying SAM with bounding box: {box}")
+        sam_predictor.set_image(image_array)
+        masks, _, _ = sam_predictor.predict(
+            box=box,
+            multimask_output=False
+        )
+
+        if masks is None or len(masks) == 0:
+            return {"status": "error", "message": "No mask was generated."}
+
+        # Convert mask to 0-255 format
+        mask = masks[0].astype(np.uint8) * 255
+        mask_pil = Image.fromarray(mask)
+
+        # ✅ Keep Blended Image (used as input to SDXL)
+        alpha = 0.5  # Blending weight for mask
+        blended_image = cv2.addWeighted(image_array, alpha, np.stack([mask]*3, axis=-1), 1 - alpha, 0)
+        blended_pil_image = Image.fromarray(blended_image).resize((1024, 1024))  # Resize to SDXL resolution
+
+        # 🎨 **Step 1: Apply Artistic Transformation with SDXL Base**
+        logger.info("🎨 Applying SDXL Base for style transfer...")
+        stylized_image = sdxl_base(
+            prompt=prompt,
+            image=blended_pil_image,  # Use the masked image for transformation
+            strength=strength_base,
+            guidance_scale=guidance_base,
+            mask_image=mask_pil  # ✅ Ensures only the segmented area is transformed
+        ).images[0]
+
+        # 🔍 **Step 2: Enhance Details with SDXL Refiner**
+        logger.info("🔍 Applying SDXL Refiner for fine-tuning...")
+        refined_image = sdxl_refiner(
+            prompt="Enhance details, improve lighting, increase texture realism",
+            image=stylized_image,
+            strength=strength_refiner,
+            guidance_scale=guidance_refiner
+        ).images[0]
+
+        # ✅ Ensure Image Output is Valid
+        if not isinstance(refined_image, Image.Image):
+            logger.error("❌ SDXL Refiner returned an invalid format.")
+            return {"status": "error", "message": "SDXL Refiner failed to generate a valid image."}
+
+        # ✅ Resize back to original dimensions before compositing
+        refined_np = np.array(refined_image.resize(input_image.size))
+        original_np = image_array
+
+        # ✅ Convert mask to binary format
+        binary_mask = 1 - (mask / 255.0).astype(np.float32)
+        binary_mask = np.stack([binary_mask]*3, axis=-1)
+
+        # ✅ Composite: Use stylized version where the mask is present
+        final_np = (refined_np * binary_mask + original_np * (1 - binary_mask)).astype(np.uint8)
+        final_image = Image.fromarray(final_np)
+
+        # ✅ Convert final image to bytes and return
+        img_io = io.BytesIO()
+        final_image.save(img_io, format="PNG")
+        img_io.seek(0)
+
+        logger.info("✅ Image stylized successfully!")
+        return Response(content=img_io.getvalue(), media_type="image/png")
+
+    except Exception as e:
+        logger.error(f"❌ Error during image stylization: {e}")
+        return {"status": "error", "message": str(e)}
+
