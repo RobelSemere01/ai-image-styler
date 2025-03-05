@@ -78,7 +78,7 @@ async def stylize_image(file: UploadFile,
 
         # Create a composite image: use the stylized version only where mask is present
         # First, convert mask to a binary mask with values 0 or 1
-        binary_mask = (mask / 255.0).astype(np.float32)
+        binary_mask = 1 - (mask / 255.0).astype(np.float32)
         # Expand dims to make it 3-channel
         binary_mask = np.stack([binary_mask]*3, axis=-1)
 
