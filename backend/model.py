@@ -5,7 +5,7 @@ from diffusers import StableDiffusionXLImg2ImgPipeline, StableDiffusionControlNe
 
 logger = logging.getLogger("AI-Styler")
 
-# ✅ Define global variables for lazy loading
+#  Define global variables for lazy loading
 _sdxl_base = None
 _sdxl_refiner = None
 _controlnet = None
@@ -22,20 +22,20 @@ def load_sd_model():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if _sdxl_base is None:
-        logger.info("🔄 Loading SDXL Base model...")
+        logger.info(" Loading SDXL Base model...")
         _sdxl_base = StableDiffusionXLImg2ImgPipeline.from_pretrained(
             "stabilityai/stable-diffusion-xl-base-1.0",
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
         ).to(device)
-        logger.info("✅ SDXL Base model loaded successfully!")
+        logger.info(" SDXL Base model loaded successfully!")
 
     if _sdxl_refiner is None:
-        logger.info("🔄 Loading SDXL Refiner model...")
+        logger.info(" Loading SDXL Refiner model...")
         _sdxl_refiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
             "stabilityai/stable-diffusion-xl-refiner-1.0",
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
         ).to(device)
-        logger.info("✅ SDXL Refiner model loaded successfully!")
+        logger.info(" SDXL Refiner model loaded successfully!")
 
     return _sdxl_base, _sdxl_refiner
 
@@ -52,8 +52,8 @@ def apply_controlnet(image, mode="depth"):
                 torch_dtype=torch.float32  # ✅ Ensure CPU compatibility
             ).to(device)
         except Exception as e:
-            logger.error(f"❌ Failed to load ControlNet: {e}")
-            return image  # ✅ Return the original image if ControlNet fails
+            logger.error(f" Failed to load ControlNet: {e}")
+            return image  #  Return the original image if ControlNet fails
 
     try:
         pipe = StableDiffusionControlNetPipeline.from_pretrained(
@@ -63,11 +63,11 @@ def apply_controlnet(image, mode="depth"):
         ).to(device)
 
         result = pipe(prompt="Depth-enhanced structured image", image=image, strength=0.8).images[0]
-        return result if isinstance(result, Image.Image) else image  # ✅ Ensure result is an image
+        return result if isinstance(result, Image.Image) else image  #  Ensure result is an image
 
     except Exception as e:
-        logger.error(f"❌ ControlNet processing failed: {e}")
-        return image  # ✅ Return original image instead of None
+        logger.error(f" ControlNet processing failed: {e}")
+        return image  #  Return original image instead of None
 
 
 
